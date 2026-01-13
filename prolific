@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""Analyze Prolific submission history for the last 30 days."""
+
+import csv
+import json
+import sys
+import urllib.request
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+def get_exchange_rate():
+    """Fetch current GBP to USD exchange rate from API."""
+    try:
+        url = "https://api.exchangerate-api.com/v4/latest/USD"
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            gbp_per_usd = data['rates']['GBP']
+            # Convert: 1 GBP = (1 / gbp_per_usd) USD
+            return 1 / gbp_per_usd
+    except Exception as e:
+        print(f"Warning: Could not fetch exchange rate ({e}). Using fallback 1.27")
+        return 1.27
+
+# Fetch current exchange rate
+GBP_TO_USD = get_exchange_rate()
+
+def parse_amount(amount_str):
+    """Parse amount string and return value in USD."""
+    if not amount_str:
+        return 0.0
+    amount_str = amount_str.strip()
+    if amount_str.startswith('£'):
+        return float(amount_str[1:]) * GBP_TO_USD
+    elif amount_str.startswith('$'):
+        return float(amount_str[1:])
+    else:
+        try:
+            return float(amount_str)
+        except ValueError:
+            return 0.0
+
+def parse_datetime(dt_str):
+    """Parse datetime string, return None if invalid."""
+    if not dt_str:
+        return None
+    try:
+        return datetime.strptime(dt_str.split('.')[0], '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        return None
+
+def load_data(filename):
+    """Load and parse the CSV file."""
+    submissions = []
+    with open(filename, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            started_at = row.get('Started At', '')
+            start_dt = parse_datetime(started_at)
+            if not start_dt:
+                continue
+
+            completed_at = row.get('Completed At', '')
+            end_dt = parse_datetime(completed_at)
+
+            # Calculate duration in hours
+            duration_hours = 0.0
+            if start_dt and end_dt:
+                duration_seconds = (end_dt - start_dt).total_seconds()
+                duration_hours = duration_seconds / 3600.0
+
+            submissions.append({
+                'study': row.get('Study', ''),
+                'reward': parse_amount(row.get('Reward', '0')),
+                'bonus': parse_amount(row.get('Bonus', '0')),
+                'date': start_dt.date(),
+                'status': row.get('Status', '').strip(),
+                'duration_hours': duration_hours
+            })
+    return submissions
+
+def analyze_by_day(submissions, num_days=30):
+    """Analyze submissions for the last N days."""
+    today = datetime.now().date()
+    results = []
+
+    for days_ago in range(num_days):
+        target_date = today - timedelta(days=days_ago)
+        day_name = target_date.strftime('%a')
+
+        day_submissions = [s for s in submissions if s['date'] == target_date]
+
+        # Exclude incomplete/unsuccessful studies
+        excluded_statuses = {'RETURNED', 'REJECTED', 'SCREENED OUT', 'TIMED-OUT'}
+        completed = [s for s in day_submissions if s['status'] not in excluded_statuses]
+
+        # Count studies (completed)
+        study_count = len(completed)
+
+        # Approved submissions
+        approved = [s for s in completed if s['status'] == 'APPROVED']
+        approved_total = sum(s['reward'] + s['bonus'] for s in approved)
+        approved_hours = sum(s['duration_hours'] for s in approved)
+
+        # Potential total (if all completed studies are approved)
+        potential_total = sum(s['reward'] + s['bonus'] for s in completed)
+        potential_hours = sum(s['duration_hours'] for s in completed)
+
+        # Calculate hourly rates
+        approved_hourly = approved_total / approved_hours if approved_hours > 0 else 0.0
+        potential_hourly = potential_total / potential_hours if potential_hours > 0 else 0.0
+
+        results.append({
+            'date': target_date,
+            'day': day_name,
+            'count': study_count,
+            'approved_usd': approved_total,
+            'potential_usd': potential_total,
+            'approved_hours': approved_hours,
+            'potential_hours': potential_hours,
+            'approved_hourly': approved_hourly,
+            'potential_hourly': potential_hourly
+        })
+
+    return results
+
+def print_results(results):
+    """Print results in a formatted table."""
+    print()
+    print("=" * 100)
+    print("PROLIFIC SUBMISSION ANALYSIS - LAST 30 DAYS")
+    print("=" * 100)
+    print(f"{'Date':<12} {'Day':<5} {'Studies':<8} {'Approved':<11} {'Potential':<11} {'Hours':<7} {'$/hr (Appr)':<12} {'$/hr (Pot)':<11}")
+    print("-" * 100)
+
+    total_count = 0
+    total_approved = 0
+    total_potential = 0
+    total_hours = 0
+
+    for r in results:
+        date_str = r['date'].strftime('%Y-%m-%d')
+        hours_str = f"{r['potential_hours']:.1f}" if r['potential_hours'] > 0 else "-"
+        appr_hr = f"${r['approved_hourly']:.2f}" if r['approved_hourly'] > 0 else "-"
+        pot_hr = f"${r['potential_hourly']:.2f}" if r['potential_hourly'] > 0 else "-"
+
+        print(f"{date_str:<12} {r['day']:<5} {r['count']:<8} ${r['approved_usd']:<10.2f} ${r['potential_usd']:<10.2f} {hours_str:<7} {appr_hr:<12} {pot_hr:<11}")
+        total_count += r['count']
+        total_approved += r['approved_usd']
+        total_potential += r['potential_usd']
+        total_hours += r['potential_hours']
+
+    # Calculate overall average hourly rates
+    avg_approved_hourly = total_approved / total_hours if total_hours > 0 else 0
+    avg_potential_hourly = total_potential / total_hours if total_hours > 0 else 0
+
+    print("-" * 100)
+    print(f"{'TOTAL':<12} {'':<5} {total_count:<8} ${total_approved:<10.2f} ${total_potential:<10.2f} {total_hours:<7.1f} ${avg_approved_hourly:<11.2f} ${avg_potential_hourly:<10.2f}")
+    print("=" * 100)
+    print(f"\nExchange rate used: £1 = ${GBP_TO_USD:.4f} (live)")
+    print()
+
+def main():
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <filename>")
+        print(f"Example: {sys.argv[0]} my_prolific_submission_history.csv")
+        sys.exit(1)
+
+    filename = sys.argv[1]
+    print(f"Loading data from {filename}...")
+    submissions = load_data(filename)
+    print(f"Loaded {len(submissions)} submissions.")
+
+    results = analyze_by_day(submissions, num_days=30)
+    print_results(results)
+
+if __name__ == '__main__':
+    main()

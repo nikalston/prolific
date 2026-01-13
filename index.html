@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prolific Submission Analyzer</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+        }
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+        }
+        .upload-section {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .file-input {
+            display: none;
+        }
+        .file-label {
+            display: inline-block;
+            padding: 15px 30px;
+            background: #3498db;
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+        .file-label:hover {
+            background: #2980b9;
+        }
+        .file-name {
+            margin-top: 10px;
+            color: #666;
+        }
+        .exchange-rate {
+            margin-top: 15px;
+            color: #666;
+            font-size: 14px;
+        }
+        .results {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+            display: none;
+        }
+        .results.visible {
+            display: block;
+        }
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            padding: 20px;
+            background: #2c3e50;
+            color: white;
+        }
+        .summary-card {
+            text-align: center;
+            padding: 15px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+        }
+        .summary-card .value {
+            font-size: 28px;
+            font-weight: bold;
+            color: #3498db;
+        }
+        .summary-card .label {
+            font-size: 12px;
+            text-transform: uppercase;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        th {
+            background: #34495e;
+            color: white;
+            font-weight: 500;
+            position: sticky;
+            top: 0;
+        }
+        tr:hover {
+            background: #f8f9fa;
+        }
+        tr.today {
+            background: #e8f6ff;
+        }
+        tr.weekend {
+            background: #fafafa;
+        }
+        .amount {
+            font-family: 'Monaco', 'Menlo', monospace;
+        }
+        .positive {
+            color: #27ae60;
+        }
+        .total-row {
+            background: #2c3e50 !important;
+            color: white;
+            font-weight: bold;
+        }
+        .total-row:hover {
+            background: #2c3e50 !important;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+        .week-total {
+            font-weight: bold;
+            color: #8e44ad;
+        }
+    </style>
+</head>
+<body>
+    <h1>Prolific Submission Analyzer</h1>
+
+    <div class="upload-section">
+        <input type="file" id="fileInput" class="file-input" accept=".csv">
+        <label for="fileInput" class="file-label">Select CSV File</label>
+        <div class="file-name" id="fileName"></div>
+        <div class="exchange-rate" id="exchangeRate">Loading exchange rate...</div>
+    </div>
+
+    <div class="results" id="results">
+        <div class="summary" id="summary"></div>
+        <table id="dataTable">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Day</th>
+                    <th>Studies</th>
+                    <th>Approved</th>
+                    <th>Potential</th>
+                    <th>Hours</th>
+                    <th>$/hr (Appr)</th>
+                    <th>$/hr (Pot)</th>
+                    <th>Week Total</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+    </div>
+
+    <script>
+        let GBP_TO_USD = 1.27;
+        const EXCLUDED_STATUSES = new Set(['RETURNED', 'REJECTED', 'SCREENED OUT', 'TIMED-OUT']);
+
+        // Fetch exchange rate on load
+        async function fetchExchangeRate() {
+            try {
+                const response = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+                const data = await response.json();
+                GBP_TO_USD = 1 / data.rates.GBP;
+                document.getElementById('exchangeRate').textContent =
+                    `Exchange rate: £1 = $${GBP_TO_USD.toFixed(4)} (live)`;
+            } catch (e) {
+                document.getElementById('exchangeRate').textContent =
+                    `Exchange rate: £1 = $${GBP_TO_USD.toFixed(4)} (fallback)`;
+            }
+        }
+        fetchExchangeRate();
+
+        function parseAmount(amountStr) {
+            if (!amountStr) return 0;
+            amountStr = amountStr.trim();
+            if (amountStr.startsWith('£')) {
+                return parseFloat(amountStr.slice(1)) * GBP_TO_USD;
+            } else if (amountStr.startsWith('$')) {
+                return parseFloat(amountStr.slice(1));
+            }
+            return parseFloat(amountStr) || 0;
+        }
+
+        function parseDateTime(dtStr) {
+            if (!dtStr) return null;
+            try {
+                return new Date(dtStr.replace(' ', 'T'));
+            } catch {
+                return null;
+            }
+        }
+
+        function parseCSV(text) {
+            const lines = text.trim().split('\n');
+            const headers = lines[0].split(',');
+            const submissions = [];
+
+            for (let i = 1; i < lines.length; i++) {
+                const values = [];
+                let current = '';
+                let inQuotes = false;
+
+                for (const char of lines[i]) {
+                    if (char === '"') {
+                        inQuotes = !inQuotes;
+                    } else if (char === ',' && !inQuotes) {
+                        values.push(current.trim());
+                        current = '';
+                    } else {
+                        current += char;
+                    }
+                }
+                values.push(current.trim());
+
+                const row = {};
+                headers.forEach((h, idx) => row[h.trim()] = values[idx] || '');
+
+                const startDt = parseDateTime(row['Started At']);
+                if (!startDt) continue;
+
+                const endDt = parseDateTime(row['Completed At']);
+                let durationHours = 0;
+                if (startDt && endDt) {
+                    durationHours = (endDt - startDt) / (1000 * 60 * 60);
+                }
+
+                submissions.push({
+                    study: row['Study'] || '',
+                    reward: parseAmount(row['Reward']),
+                    bonus: parseAmount(row['Bonus']),
+                    date: startDt.toISOString().split('T')[0],
+                    status: (row['Status'] || '').trim(),
+                    durationHours
+                });
+            }
+            return submissions;
+        }
+
+        function analyzeByDay(submissions, numDays = 30) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const results = [];
+
+            for (let daysAgo = 0; daysAgo < numDays; daysAgo++) {
+                const targetDate = new Date(today);
+                targetDate.setDate(today.getDate() - daysAgo);
+                const dateStr = targetDate.toISOString().split('T')[0];
+                const dayName = targetDate.toLocaleDateString('en-US', { weekday: 'short' });
+
+                const daySubmissions = submissions.filter(s => s.date === dateStr);
+                const completed = daySubmissions.filter(s => !EXCLUDED_STATUSES.has(s.status));
+                const approved = completed.filter(s => s.status === 'APPROVED');
+
+                const studyCount = completed.length;
+                const approvedTotal = approved.reduce((sum, s) => sum + s.reward + s.bonus, 0);
+                const approvedHours = approved.reduce((sum, s) => sum + s.durationHours, 0);
+                const potentialTotal = completed.reduce((sum, s) => sum + s.reward + s.bonus, 0);
+                const potentialHours = completed.reduce((sum, s) => sum + s.durationHours, 0);
+
+                const approvedHourly = approvedHours > 0 ? approvedTotal / approvedHours : 0;
+                const potentialHourly = potentialHours > 0 ? potentialTotal / potentialHours : 0;
+
+                results.push({
+                    date: dateStr,
+                    day: dayName,
+                    count: studyCount,
+                    approvedUsd: approvedTotal,
+                    potentialUsd: potentialTotal,
+                    approvedHours,
+                    potentialHours,
+                    approvedHourly,
+                    potentialHourly,
+                    isToday: daysAgo === 0,
+                    isWeekend: dayName === 'Sat' || dayName === 'Sun',
+                    weekTotal: null
+                });
+            }
+
+            // Calculate week totals (Monday to Sunday)
+            // Go through results and calculate totals for each week ending on Sunday
+            for (let i = 0; i < results.length; i++) {
+                if (results[i].day === 'Sun') {
+                    let weekTotal = 0;
+                    // Sum from this Sunday back to Monday (7 days)
+                    for (let j = i; j < Math.min(i + 7, results.length); j++) {
+                        weekTotal += results[j].approvedUsd;
+                        // Stop if we hit the previous Sunday
+                        if (j > i && results[j].day === 'Sun') break;
+                    }
+                    results[i].weekTotal = weekTotal;
+                }
+            }
+
+            return results;
+        }
+
+        function formatMoney(val) {
+            return '$' + val.toFixed(2);
+        }
+
+        function renderResults(results) {
+            const totals = results.reduce((acc, r) => ({
+                count: acc.count + r.count,
+                approved: acc.approved + r.approvedUsd,
+                potential: acc.potential + r.potentialUsd,
+                hours: acc.hours + r.potentialHours
+            }), { count: 0, approved: 0, potential: 0, hours: 0 });
+
+            const avgApprovedHourly = totals.hours > 0 ? totals.approved / totals.hours : 0;
+            const avgPotentialHourly = totals.hours > 0 ? totals.potential / totals.hours : 0;
+
+            document.getElementById('summary').innerHTML = `
+                <div class="summary-card">
+                    <div class="value">${totals.count}</div>
+                    <div class="label">Total Studies</div>
+                </div>
+                <div class="summary-card">
+                    <div class="value">${formatMoney(totals.approved)}</div>
+                    <div class="label">Approved</div>
+                </div>
+                <div class="summary-card">
+                    <div class="value">${formatMoney(totals.potential)}</div>
+                    <div class="label">Potential</div>
+                </div>
+                <div class="summary-card">
+                    <div class="value">${totals.hours.toFixed(1)}h</div>
+                    <div class="label">Total Hours</div>
+                </div>
+                <div class="summary-card">
+                    <div class="value">${formatMoney(avgApprovedHourly)}/hr</div>
+                    <div class="label">Avg Hourly (Approved)</div>
+                </div>
+            `;
+
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = results.map(r => `
+                <tr class="${r.isToday ? 'today' : ''} ${r.isWeekend ? 'weekend' : ''}">
+                    <td>${r.date}</td>
+                    <td>${r.day}</td>
+                    <td>${r.count}</td>
+                    <td class="amount">${formatMoney(r.approvedUsd)}</td>
+                    <td class="amount">${formatMoney(r.potentialUsd)}</td>
+                    <td>${r.potentialHours > 0 ? r.potentialHours.toFixed(1) : '-'}</td>
+                    <td class="amount ${r.approvedHourly > 12 ? 'positive' : ''}">${r.approvedHourly > 0 ? formatMoney(r.approvedHourly) : '-'}</td>
+                    <td class="amount">${r.potentialHourly > 0 ? formatMoney(r.potentialHourly) : '-'}</td>
+                    <td class="amount week-total">${r.weekTotal !== null ? formatMoney(r.weekTotal) : ''}</td>
+                </tr>
+            `).join('') + `
+                <tr class="total-row">
+                    <td>TOTAL</td>
+                    <td></td>
+                    <td>${totals.count}</td>
+                    <td class="amount">${formatMoney(totals.approved)}</td>
+                    <td class="amount">${formatMoney(totals.potential)}</td>
+                    <td>${totals.hours.toFixed(1)}</td>
+                    <td class="amount">${formatMoney(avgApprovedHourly)}</td>
+                    <td class="amount">${formatMoney(avgPotentialHourly)}</td>
+                    <td></td>
+                </tr>
+            `;
+
+            document.getElementById('results').classList.add('visible');
+        }
+
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            document.getElementById('fileName').textContent = file.name;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const submissions = parseCSV(e.target.result);
+                const results = analyzeByDay(submissions, 30);
+                renderResults(results);
+            };
+            reader.readAsText(file);
+        });
+    </script>
+</body>
+</html>
