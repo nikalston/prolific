@@ -113,6 +113,9 @@
         tr.weekend {
             background: #fafafa;
         }
+        tr.all-approved {
+            background: #d4edda;
+        }
         .amount {
             font-family: 'Monaco', 'Menlo', monospace;
         }
@@ -195,9 +198,8 @@
                         <th>Studies</th>
                         <th>Approved</th>
                         <th>Potential</th>
-                        <th>Hours</th>
+                        <th>Mins</th>
                         <th>$/hr (Appr)</th>
-                        <th>$/hr (Pot)</th>
                         <th>Week Total</th>
                     </tr>
                 </thead>
@@ -299,7 +301,7 @@
                     reward: parseAmount(row['Reward']),
                     bonus: parseAmount(row['Bonus']),
                     date: startDt.toISOString().split('T')[0],
-                    status: (row['Status'] || '').trim(),
+                    status: (row['Status'] || '').trim().toUpperCase(),
                     durationHours
                 });
             }
@@ -427,8 +429,10 @@
             const avgHourly = totals.hours > 0 ? totals.approved / totals.hours : 0;
 
             const tbody = document.getElementById('monthlyBody');
-            tbody.innerHTML = results.map(r => `
-                <tr class="${r.isCurrentMonth ? 'current-month' : ''}">
+            tbody.innerHTML = results.map(r => {
+                const allApproved = r.potentialUsd > 0 && Math.abs(r.approvedUsd - r.potentialUsd) < 0.01;
+                return `
+                <tr class="${allApproved ? 'all-approved' : ''} ${r.isCurrentMonth ? 'current-month' : ''}">
                     <td>${r.monthName}</td>
                     <td>${r.count}</td>
                     <td class="amount">${formatMoney(r.approvedUsd)}</td>
@@ -436,7 +440,8 @@
                     <td>${r.approvedHours > 0 ? r.approvedHours.toFixed(1) : '-'}</td>
                     <td class="amount ${r.approvedHourly > 12 ? 'positive' : ''}">${r.approvedHourly > 0 ? formatMoney(r.approvedHourly) : '-'}</td>
                 </tr>
-            `).join('') + `
+            `;
+            }).join('') + `
                 <tr class="total-row">
                     <td>ALL TIME</td>
                     <td>${totals.count}</td>
@@ -457,7 +462,6 @@
             }), { count: 0, approved: 0, potential: 0, hours: 0 });
 
             const avgApprovedHourly = totals.hours > 0 ? totals.approved / totals.hours : 0;
-            const avgPotentialHourly = totals.hours > 0 ? totals.potential / totals.hours : 0;
 
             document.getElementById('summary').innerHTML = `
                 <div class="summary-card">
@@ -473,8 +477,8 @@
                     <div class="label">Potential</div>
                 </div>
                 <div class="summary-card">
-                    <div class="value">${totals.hours.toFixed(1)}h</div>
-                    <div class="label">Total Hours</div>
+                    <div class="value">${Math.round(totals.hours * 60)}m</div>
+                    <div class="label">Total Minutes</div>
                 </div>
                 <div class="summary-card">
                     <div class="value">${formatMoney(avgApprovedHourly)}/hr</div>
@@ -483,28 +487,29 @@
             `;
 
             const tbody = document.getElementById('tableBody');
-            tbody.innerHTML = results.map(r => `
-                <tr class="${r.isToday ? 'today' : ''} ${r.isWeekend ? 'weekend' : ''}">
+            tbody.innerHTML = results.map(r => {
+                const allApproved = r.potentialUsd > 0 && Math.abs(r.approvedUsd - r.potentialUsd) < 0.01;
+                return `
+                <tr class="${allApproved ? 'all-approved' : ''} ${r.isToday ? 'today' : ''} ${r.isWeekend ? 'weekend' : ''}">
                     <td>${r.date}</td>
                     <td>${r.day}</td>
                     <td>${r.count}</td>
                     <td class="amount">${formatMoney(r.approvedUsd)}</td>
                     <td class="amount">${formatMoney(r.potentialUsd)}</td>
-                    <td>${r.potentialHours > 0 ? r.potentialHours.toFixed(1) : '-'}</td>
+                    <td>${r.potentialHours > 0 ? Math.round(r.potentialHours * 60) : '-'}</td>
                     <td class="amount ${r.approvedHourly > 12 ? 'positive' : ''}">${r.approvedHourly > 0 ? formatMoney(r.approvedHourly) : '-'}</td>
-                    <td class="amount">${r.potentialHourly > 0 ? formatMoney(r.potentialHourly) : '-'}</td>
                     <td class="amount week-total">${r.weekTotal !== null ? formatMoney(r.weekTotal) : ''}</td>
                 </tr>
-            `).join('') + `
+            `;
+            }).join('') + `
                 <tr class="total-row">
                     <td>TOTAL</td>
                     <td></td>
                     <td>${totals.count}</td>
                     <td class="amount">${formatMoney(totals.approved)}</td>
                     <td class="amount">${formatMoney(totals.potential)}</td>
-                    <td>${totals.hours.toFixed(1)}</td>
+                    <td>${Math.round(totals.hours * 60)}</td>
                     <td class="amount">${formatMoney(avgApprovedHourly)}</td>
-                    <td class="amount">${formatMoney(avgPotentialHourly)}</td>
                     <td></td>
                 </tr>
             `;
