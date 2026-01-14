@@ -136,6 +136,38 @@
             font-weight: bold;
             color: #8e44ad;
         }
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #3498db;
+            margin-bottom: 0;
+        }
+        .tab-btn {
+            padding: 12px 24px;
+            background: #ecf0f1;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #666;
+            transition: all 0.3s;
+            border-radius: 8px 8px 0 0;
+            margin-right: 4px;
+        }
+        .tab-btn:hover {
+            background: #d5dbdb;
+        }
+        .tab-btn.active {
+            background: #3498db;
+            color: white;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .current-month {
+            background: #e8f6ff;
+        }
     </style>
 </head>
 <body>
@@ -150,22 +182,43 @@
 
     <div class="results" id="results">
         <div class="summary" id="summary"></div>
-        <table id="dataTable">
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Day</th>
-                    <th>Studies</th>
-                    <th>Approved</th>
-                    <th>Potential</th>
-                    <th>Hours</th>
-                    <th>$/hr (Appr)</th>
-                    <th>$/hr (Pot)</th>
-                    <th>Week Total</th>
-                </tr>
-            </thead>
-            <tbody id="tableBody"></tbody>
-        </table>
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="daily">Last 30 Days</button>
+            <button class="tab-btn" data-tab="monthly">Monthly Totals</button>
+        </div>
+        <div id="daily" class="tab-content active">
+            <table id="dataTable">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Day</th>
+                        <th>Studies</th>
+                        <th>Approved</th>
+                        <th>Potential</th>
+                        <th>Hours</th>
+                        <th>$/hr (Appr)</th>
+                        <th>$/hr (Pot)</th>
+                        <th>Week Total</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+        <div id="monthly" class="tab-content">
+            <table id="monthlyTable">
+                <thead>
+                    <tr>
+                        <th>Month</th>
+                        <th>Studies</th>
+                        <th>Approved</th>
+                        <th>Potential</th>
+                        <th>Hours</th>
+                        <th>$/hr (Appr)</th>
+                    </tr>
+                </thead>
+                <tbody id="monthlyBody"></tbody>
+            </table>
+        </div>
     </div>
 
     <script>
@@ -315,6 +368,86 @@
             return '$' + val.toFixed(2);
         }
 
+        function analyzeByMonth(submissions) {
+            const monthlyData = {};
+
+            // Filter and group by month
+            const completed = submissions.filter(s => !EXCLUDED_STATUSES.has(s.status));
+
+            completed.forEach(s => {
+                const monthKey = s.date.substring(0, 7); // YYYY-MM
+                if (!monthlyData[monthKey]) {
+                    monthlyData[monthKey] = {
+                        count: 0,
+                        approvedUsd: 0,
+                        potentialUsd: 0,
+                        approvedHours: 0,
+                        potentialHours: 0
+                    };
+                }
+                const m = monthlyData[monthKey];
+                m.count++;
+                m.potentialUsd += s.reward + s.bonus;
+                m.potentialHours += s.durationHours;
+                if (s.status === 'APPROVED') {
+                    m.approvedUsd += s.reward + s.bonus;
+                    m.approvedHours += s.durationHours;
+                }
+            });
+
+            // Convert to sorted array (most recent first)
+            const results = Object.entries(monthlyData)
+                .map(([month, data]) => {
+                    const date = new Date(month + '-01');
+                    const monthName = date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+                    const approvedHourly = data.approvedHours > 0 ? data.approvedUsd / data.approvedHours : 0;
+                    const now = new Date();
+                    const isCurrentMonth = month === now.toISOString().substring(0, 7);
+                    return {
+                        month,
+                        monthName,
+                        ...data,
+                        approvedHourly,
+                        isCurrentMonth
+                    };
+                })
+                .sort((a, b) => b.month.localeCompare(a.month));
+
+            return results;
+        }
+
+        function renderMonthlyResults(results) {
+            const totals = results.reduce((acc, r) => ({
+                count: acc.count + r.count,
+                approved: acc.approved + r.approvedUsd,
+                potential: acc.potential + r.potentialUsd,
+                hours: acc.hours + r.approvedHours
+            }), { count: 0, approved: 0, potential: 0, hours: 0 });
+
+            const avgHourly = totals.hours > 0 ? totals.approved / totals.hours : 0;
+
+            const tbody = document.getElementById('monthlyBody');
+            tbody.innerHTML = results.map(r => `
+                <tr class="${r.isCurrentMonth ? 'current-month' : ''}">
+                    <td>${r.monthName}</td>
+                    <td>${r.count}</td>
+                    <td class="amount">${formatMoney(r.approvedUsd)}</td>
+                    <td class="amount">${formatMoney(r.potentialUsd)}</td>
+                    <td>${r.approvedHours > 0 ? r.approvedHours.toFixed(1) : '-'}</td>
+                    <td class="amount ${r.approvedHourly > 12 ? 'positive' : ''}">${r.approvedHourly > 0 ? formatMoney(r.approvedHourly) : '-'}</td>
+                </tr>
+            `).join('') + `
+                <tr class="total-row">
+                    <td>ALL TIME</td>
+                    <td>${totals.count}</td>
+                    <td class="amount">${formatMoney(totals.approved)}</td>
+                    <td class="amount">${formatMoney(totals.potential)}</td>
+                    <td>${totals.hours.toFixed(1)}</td>
+                    <td class="amount">${formatMoney(avgHourly)}</td>
+                </tr>
+            `;
+        }
+
         function renderResults(results) {
             const totals = results.reduce((acc, r) => ({
                 count: acc.count + r.count,
@@ -388,10 +521,22 @@
             const reader = new FileReader();
             reader.onload = function(e) {
                 const submissions = parseCSV(e.target.result);
-                const results = analyzeByDay(submissions, 30);
-                renderResults(results);
+                const dailyResults = analyzeByDay(submissions, 30);
+                renderResults(dailyResults);
+                const monthlyResults = analyzeByMonth(submissions);
+                renderMonthlyResults(monthlyResults);
             };
             reader.readAsText(file);
+        });
+
+        // Tab switching
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                this.classList.add('active');
+                document.getElementById(this.dataset.tab).classList.add('active');
+            });
         });
     </script>
 </body>
