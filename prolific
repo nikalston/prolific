@@ -51,8 +51,10 @@ def parse_datetime(dt_str):
 def load_data(filename):
     """Load and parse the CSV file."""
     submissions = []
-    with open(filename, 'r', encoding='utf-8') as f:
+    with open(filename, 'r', encoding='utf-8', newline='') as f:
         reader = csv.DictReader(f)
+        # Strip whitespace from field names (handles CRLF line endings)
+        reader.fieldnames = [name.strip() for name in reader.fieldnames]
         for row in reader:
             started_at = row.get('Started At', '')
             start_dt = parse_datetime(started_at)
@@ -68,12 +70,15 @@ def load_data(filename):
                 duration_seconds = (end_dt - start_dt).total_seconds()
                 duration_hours = duration_seconds / 3600.0
 
+            status = row.get('Status', '').strip().upper()
+            is_valid_for_potential = status in ('APPROVED', 'AWAITING REVIEW')
+
             submissions.append({
                 'study': row.get('Study', ''),
-                'reward': parse_amount(row.get('Reward', '0')),
-                'bonus': parse_amount(row.get('Bonus', '0')),
+                'reward': parse_amount(row.get('Reward', '0')) if is_valid_for_potential else 0,
+                'bonus': parse_amount(row.get('Bonus', '0')) if is_valid_for_potential else 0,
                 'date': start_dt.date(),
-                'status': row.get('Status', '').strip(),
+                'status': status,
                 'duration_hours': duration_hours
             })
     return submissions
@@ -89,9 +94,9 @@ def analyze_by_day(submissions, num_days=30):
 
         day_submissions = [s for s in submissions if s['date'] == target_date]
 
-        # Exclude incomplete/unsuccessful studies
-        excluded_statuses = {'RETURNED', 'REJECTED', 'SCREENED OUT', 'TIMED-OUT'}
-        completed = [s for s in day_submissions if s['status'] not in excluded_statuses]
+        # Only include APPROVED and AWAITING REVIEW in potential calculations
+        included_statuses = {'APPROVED', 'AWAITING REVIEW'}
+        completed = [s for s in day_submissions if s['status'] in included_statuses]
 
         # Count studies (completed)
         study_count = len(completed)

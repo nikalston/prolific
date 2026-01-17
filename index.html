@@ -171,6 +171,62 @@
         .current-month {
             background: #e8f6ff;
         }
+        .day-row {
+            cursor: pointer;
+        }
+        .day-row:hover {
+            background: #e3f2fd !important;
+        }
+        .day-row td:first-child::before {
+            content: '▶ ';
+            font-size: 10px;
+            color: #666;
+        }
+        .day-row.expanded td:first-child::before {
+            content: '▼ ';
+        }
+        .detail-row {
+            display: none;
+        }
+        .detail-row.visible {
+            display: table-row;
+        }
+        .detail-row td {
+            padding: 0;
+            background: #f8f9fa;
+        }
+        .detail-table {
+            width: 100%;
+            margin: 0;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .detail-table td {
+            padding: 8px 15px;
+            border-bottom: 1px solid #eee;
+            background: #f8f9fa;
+        }
+        .detail-table tr:last-child td {
+            border-bottom: 2px solid #ddd;
+        }
+        .detail-table .study-name {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .status-approved {
+            color: #27ae60;
+            font-weight: 500;
+        }
+        .status-awaiting {
+            color: #f39c12;
+            font-weight: 500;
+        }
+        .status-returned, .status-rejected, .status-timedout, .status-screenedout {
+            color: #e74c3c;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -225,7 +281,12 @@
 
     <script>
         let GBP_TO_USD = 1.27;
-        const EXCLUDED_STATUSES = new Set(['RETURNED', 'REJECTED', 'SCREENED OUT', 'TIMED-OUT']);
+        const EXCLUDED_STATUSES = ['RETURNED', 'REJECTED', 'SCREENED OUT', 'TIMED-OUT'];
+
+        function isExcludedStatus(status) {
+            const normalized = (status || '').toUpperCase().trim();
+            return EXCLUDED_STATUSES.includes(normalized);
+        }
 
         // Fetch exchange rate on load
         async function fetchExchangeRate() {
@@ -263,8 +324,10 @@
         }
 
         function parseCSV(text) {
-            const lines = text.trim().split('\n');
-            const headers = lines[0].split(',');
+            // Normalize line endings (handle CRLF from Windows)
+            const normalizedText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const lines = normalizedText.trim().split('\n');
+            const headers = lines[0].split(',').map(h => h.trim());
             const submissions = [];
 
             for (let i = 1; i < lines.length; i++) {
@@ -296,12 +359,19 @@
                     durationHours = (endDt - startDt) / (1000 * 60 * 60);
                 }
 
+                const status = (row['Status'] || '').trim().toUpperCase();
+                const isValidForPotential = status === 'APPROVED' || status === 'AWAITING REVIEW';
+                const reward = parseAmount(row['Reward']);
+                const bonus = parseAmount(row['Bonus']);
+
                 submissions.push({
                     study: row['Study'] || '',
-                    reward: parseAmount(row['Reward']),
-                    bonus: parseAmount(row['Bonus']),
+                    reward: isValidForPotential ? reward : 0,
+                    bonus: isValidForPotential ? bonus : 0,
+                    displayReward: reward,
+                    displayBonus: bonus,
                     date: startDt.toISOString().split('T')[0],
-                    status: (row['Status'] || '').trim().toUpperCase(),
+                    status: status,
                     durationHours
                 });
             }
@@ -320,7 +390,11 @@
                 const dayName = targetDate.toLocaleDateString('en-US', { weekday: 'short' });
 
                 const daySubmissions = submissions.filter(s => s.date === dateStr);
-                const completed = daySubmissions.filter(s => !EXCLUDED_STATUSES.has(s.status));
+                // Only include APPROVED and AWAITING REVIEW in potential calculations
+                const completed = daySubmissions.filter(s => {
+                    const status = s.status.toUpperCase();
+                    return status === 'APPROVED' || status === 'AWAITING REVIEW';
+                });
                 const approved = completed.filter(s => s.status === 'APPROVED');
 
                 const studyCount = completed.length;
@@ -344,7 +418,8 @@
                     potentialHourly,
                     isToday: daysAgo === 0,
                     isWeekend: dayName === 'Sat' || dayName === 'Sun',
-                    weekTotal: null
+                    weekTotal: null,
+                    submissions: daySubmissions
                 });
             }
 
@@ -373,8 +448,11 @@
         function analyzeByMonth(submissions) {
             const monthlyData = {};
 
-            // Filter and group by month
-            const completed = submissions.filter(s => !EXCLUDED_STATUSES.has(s.status));
+            // Filter and group by month - only APPROVED and AWAITING REVIEW
+            const completed = submissions.filter(s => {
+                const status = s.status.toUpperCase();
+                return status === 'APPROVED' || status === 'AWAITING REVIEW';
+            });
 
             completed.forEach(s => {
                 const monthKey = s.date.substring(0, 7); // YYYY-MM
@@ -487,10 +565,26 @@
             `;
 
             const tbody = document.getElementById('tableBody');
-            tbody.innerHTML = results.map(r => {
+            tbody.innerHTML = results.map((r, idx) => {
                 const allApproved = r.potentialUsd > 0 && Math.abs(r.approvedUsd - r.potentialUsd) < 0.01;
+                const hasStudies = r.submissions && r.submissions.length > 0;
+
+                const detailRows = hasStudies ? r.submissions.map(s => {
+                    const statusClass = getStatusClass(s.status);
+                    const mins = s.durationHours > 0 ? Math.round(s.durationHours * 60) : '-';
+                    return `
+                        <tr>
+                            <td class="study-name" title="${escapeHtml(s.study)}">${escapeHtml(s.study)}</td>
+                            <td class="amount">${formatMoney(s.displayReward)}</td>
+                            <td class="amount">${s.displayBonus > 0 ? formatMoney(s.displayBonus) : '-'}</td>
+                            <td>${mins}</td>
+                            <td class="${statusClass}">${s.status}</td>
+                        </tr>
+                    `;
+                }).join('') : '';
+
                 return `
-                <tr class="${allApproved ? 'all-approved' : ''} ${r.isToday ? 'today' : ''} ${r.isWeekend ? 'weekend' : ''}">
+                <tr class="day-row ${allApproved ? 'all-approved' : ''} ${r.isToday ? 'today' : ''} ${r.isWeekend ? 'weekend' : ''}" data-idx="${idx}">
                     <td>${r.date}</td>
                     <td>${r.day}</td>
                     <td>${r.count}</td>
@@ -499,6 +593,15 @@
                     <td>${r.potentialHours > 0 ? Math.round(r.potentialHours * 60) : '-'}</td>
                     <td class="amount ${r.approvedHourly > 12 ? 'positive' : ''}">${r.approvedHourly > 0 ? formatMoney(r.approvedHourly) : '-'}</td>
                     <td class="amount week-total">${r.weekTotal !== null ? formatMoney(r.weekTotal) : ''}</td>
+                </tr>
+                <tr class="detail-row" data-idx="${idx}">
+                    <td colspan="8">
+                        <table class="detail-table">
+                            <tbody>
+                                ${detailRows || '<tr><td colspan="5" style="text-align:center;color:#999;">No studies this day</td></tr>'}
+                            </tbody>
+                        </table>
+                    </td>
                 </tr>
             `;
             }).join('') + `
@@ -514,7 +617,34 @@
                 </tr>
             `;
 
+            // Add click handlers for expandable rows
+            document.querySelectorAll('.day-row').forEach(row => {
+                row.addEventListener('click', function() {
+                    const idx = this.dataset.idx;
+                    const detailRow = document.querySelector(`.detail-row[data-idx="${idx}"]`);
+                    this.classList.toggle('expanded');
+                    detailRow.classList.toggle('visible');
+                });
+            });
+
             document.getElementById('results').classList.add('visible');
+        }
+
+        function getStatusClass(status) {
+            const s = (status || '').toUpperCase();
+            if (s === 'APPROVED') return 'status-approved';
+            if (s === 'AWAITING REVIEW') return 'status-awaiting';
+            if (s === 'RETURNED') return 'status-returned';
+            if (s === 'REJECTED') return 'status-rejected';
+            if (s === 'TIMED-OUT') return 'status-timedout';
+            if (s === 'SCREENED OUT') return 'status-screenedout';
+            return '';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         document.getElementById('fileInput').addEventListener('change', function(e) {
