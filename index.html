@@ -317,10 +317,17 @@
         function parseDateTime(dtStr) {
             if (!dtStr) return null;
             try {
-                return new Date(dtStr.replace(' ', 'T'));
+                const date = new Date(dtStr.replace(' ', 'T'));
+                return isNaN(date.getTime()) ? null : date;
             } catch {
                 return null;
             }
+        }
+
+        function toLocalDateStr(date) {
+            return date.getFullYear() + '-' +
+                   String(date.getMonth() + 1).padStart(2, '0') + '-' +
+                   String(date.getDate()).padStart(2, '0');
         }
 
         function parseCSV(text) {
@@ -370,7 +377,7 @@
                     bonus: isValidForPotential ? bonus : 0,
                     displayReward: reward,
                     displayBonus: bonus,
-                    date: startDt.toISOString().split('T')[0],
+                    date: toLocalDateStr(startDt),
                     status: status,
                     durationHours
                 });
@@ -386,7 +393,7 @@
             for (let daysAgo = 0; daysAgo < numDays; daysAgo++) {
                 const targetDate = new Date(today);
                 targetDate.setDate(today.getDate() - daysAgo);
-                const dateStr = targetDate.toISOString().split('T')[0];
+                const dateStr = toLocalDateStr(targetDate);
                 const dayName = targetDate.toLocaleDateString('en-US', { weekday: 'short' });
 
                 const daySubmissions = submissions.filter(s => s.date === dateStr);
@@ -482,7 +489,7 @@
                     const monthName = date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
                     const approvedHourly = data.approvedHours > 0 ? data.approvedUsd / data.approvedHours : 0;
                     const now = new Date();
-                    const isCurrentMonth = month === now.toISOString().substring(0, 7);
+                    const isCurrentMonth = month === toLocalDateStr(now).substring(0, 7);
                     return {
                         month,
                         monthName,
